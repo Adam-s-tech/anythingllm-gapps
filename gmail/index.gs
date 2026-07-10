@@ -40,6 +40,7 @@ const API_KEY = "CHANGE_ME_TO_SOMETHING_SECURE";
  *   search              - Search emails using Gmail query syntax
  *                         (use queries like "is:inbox", "is:starred", "is:spam", "in:trash", "is:important")
  *   read_thread         - Read full thread by ID (includes attachments as base64)
+ *   get_threads         - Read multiple threads by IDs (pass threadIds array, attachments: bool default false)
  *
  * DRAFTS
  *   create_draft        - Create a new draft email (supports attachments)
@@ -66,6 +67,7 @@ const API_KEY = "CHANGE_ME_TO_SOMETHING_SECURE";
  *   move_to_inbox       - Move a thread to inbox
  *
  * ACCOUNT
+ *   get_user            - Returns the deployed user's name and email
  *   get_mailbox_stats   - Unread counts for inbox, priority, starred, spam
  *   version             - API version info
  */
@@ -244,6 +246,44 @@ function serializeMessage(m) {
   };
 }
 
+function serializeMessageNoAttachments(m) {
+  return {
+    id: m.getId(),
+    threadId: m.getThread().getId(),
+    from: m.getFrom(),
+    to: m.getTo(),
+    cc: m.getCc(),
+    bcc: m.getBcc(),
+    replyTo: m.getReplyTo(),
+    date: m.getDate(),
+    subject: m.getSubject(),
+    body: m.getPlainBody(),
+    isUnread: m.isUnread(),
+    isStarred: m.isStarred(),
+    isDraft: m.isDraft(),
+    attachments: [],
+  };
+}
+
+function threadDetailNoAttachments(t) {
+  const messages = t.getMessages();
+  return {
+    id: t.getId(),
+    subject: t.getFirstMessageSubject(),
+    lastMessageDate: t.getLastMessageDate(),
+    messageCount: t.getMessageCount(),
+    permalink: t.getPermalink(),
+    isUnread: t.isUnread(),
+    isImportant: t.isImportant(),
+    isInInbox: t.isInInbox(),
+    isInSpam: t.isInSpam(),
+    isInTrash: t.isInTrash(),
+    isInPriorityInbox: t.isInPriorityInbox(),
+    hasStarredMessages: t.hasStarredMessages(),
+    messages: messages.map(serializeMessageNoAttachments),
+  };
+}
+
 function serializeDraft(d) {
   const msg = d.getMessage();
   return {
@@ -316,6 +356,22 @@ class MailManager {
     const thread = GmailApp.getThreadById(threadId);
     if (!thread) throw new Error(`Thread not found: ${threadId}`);
     return threadDetail(thread);
+  }
+
+  getThreads(threadIds, includeAttachments = false) {
+    if (!Array.isArray(threadIds) || threadIds.length === 0)
+      throw new Error("'threadIds' must be a non-empty array");
+    return threadIds.map((id) => {
+      try {
+        const thread = GmailApp.getThreadById(id);
+        if (!thread) return { id, error: `Thread not found: ${id}` };
+        return includeAttachments
+          ? threadDetail(thread)
+          : threadDetailNoAttachments(thread);
+      } catch (err) {
+        return { id, error: err.toString() };
+      }
+    });
   }
 
   /* ──────────── DRAFT MANAGEMENT ──────────── */
@@ -454,6 +510,12 @@ class MailManager {
 
   /* ──────────── ACCOUNT ──────────── */
 
+  getUser() {
+    const email = Session.getEffectiveUser().getEmail();
+    const aliases = GmailApp.getAliases();
+    return { email, aliases };
+  }
+
   getMailboxStats() {
     return {
       inboxUnreadCount: GmailApp.getInboxUnreadCount(),
@@ -493,6 +555,15 @@ function doPost(e) {
         );
       case "read_thread":
         return createResponse(ok(m.readThread(payload.threadId)));
+      case "get_threads":
+        return createResponse(
+          ok(
+            m.getThreads(
+              payload.threadIds,
+              payload.attachments === true,
+            ),
+          ),
+        );
 
       /* ── Drafts ── */
       case "create_draft":
@@ -563,6 +634,8 @@ function doPost(e) {
       /* ── Account ── */
       case "get_mailbox_stats":
         return createResponse(ok(m.getMailboxStats()));
+      case "get_user":
+        return createResponse(ok(m.getUser()));
       case "version":
         return createResponse(
           ok({
@@ -570,6 +643,7 @@ function doPost(e) {
             availableActions: [
               "search",
               "read_thread",
+              "get_threads",
               "create_draft",
               "create_draft_reply",
               "update_draft",
@@ -585,6 +659,7 @@ function doPost(e) {
               "move_to_archive",
               "move_to_inbox",
               "get_mailbox_stats",
+              "get_user",
               "version",
             ],
           }),
